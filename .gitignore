@@ -1,0 +1,4 @@
+_pocker/*
+build/
+dist/
+*.egg-info/
