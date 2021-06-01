@@ -1,10 +1,12 @@
 """Docker From Scratch Workshop - Level 1: Chrooting into an image.
 
-Goal: Have your own private hostname!
+Goal: Have your new process start with PID 1 :)
 
 Usage:
     running:
         sudo /venv/bin/python pocker.py run -i ubuntu bash -- -c hostname
+    test:
+        ps aux, can only see process in the container
 """
 
 from __future__ import print_function
@@ -109,13 +111,9 @@ def makedev(dev_path):
 
 
 def contain(command, image_name, image_dir, container_id, container_dir):
-    # 给当前进程创建 mount namespace
-    linux.unshare(linux.CLONE_NEWNS)
     # 将 host 的根目录挂载状态改为私有的，保证内部 mount ns 挂载操作不会传播到 host
     linux.mount(None, '/', None, linux.MS_PRIVATE | linux.MS_REC, None)
     
-    # 给当前进程创建 UTS namespace，主机名和域名隔离
-    linux.unshare(linux.CLONE_NEWUTS)
     # 修改 hostname 为容器 id
     linux.sethostname(container_id)
 
@@ -157,14 +155,12 @@ def contain(command, image_name, image_dir, container_id, container_dir):
 def run(image_name, image_dir, container_dir, command):
     # 为此次启动的容器确定一个随机的 id
     contain_id = str(uuid.uuid4())
-    pid = os.fork()
-    if pid == 0:
-        # This is the child, we'll try to do some containment here
-        try:
-            contain(command, image_name, image_dir, contain_id, container_dir)
-        except Exception:
-            traceback.print_exc()
-            os._exit(1)  # something went wrong in contain()
+    
+    # 无法使用先 fork 再改变子进程命名空间的方法改变 PID
+    # 使用更简单的API：clone，以在创建子进程的时候就改变命名空间
+    flag = linux.CLONE_NEWPID | linux.CLONE_NEWNS | linux.CLONE_NEWUTS
+    callback_args = (command, image_name, image_dir, contain_id, container_dir)
+    pid = linux.clone(contain, flag, callback_args)
 
     # This is the parent, pid contains the PID of the forked process
     # wait for the forked child and fetch the exit status
