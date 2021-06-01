@@ -1,19 +1,15 @@
 """Docker From Scratch Workshop - Level 1: Chrooting into an image.
 
-Goal: Let's get some filesystem isolation with good ol' chroot.
+Goal: Separate our mount table from the other processes.
 
 Usage:
     running:
         sudo /venv/bin/python pocker.py run -i ubuntu -- bash
     will:
-        fork a new child process that will:
-           - unpack an ubuntu image into a new directory
-           - chroot() into that directory
-           - exec 'bash'
-        while the parent waits for it to finish.
+        - fork a new chrooted process in a new mount namespace
     test:
-        find / > /dev/null
-        ls -l /dev/null, see file size
+        ls -lh /proc/self/ns/mnt, in container and host can see difference
+        findmnt, host cannot see mount operation doing in the container
 """
 
 from __future__ import print_function
@@ -108,6 +104,11 @@ def makedev(dev_path):
 
 
 def contain(command, image_name, image_dir, container_id, container_dir):
+    # 给当前进程创建 mount namespace
+    linux.unshare(linux.CLONE_NEWNS)
+    # 将 host 的根目录挂载状态改为私有的，保证内部 mount ns 挂载操作不会到host
+    linux.mount(None, '/', None, linux.MS_PRIVATE | linux.MS_REC, None)
+
     new_root = create_container_root(
         image_name, image_dir, container_id, container_dir)
     print('Created a new root fs for our container: {}'.format(new_root))
