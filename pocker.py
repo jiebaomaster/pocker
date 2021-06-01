@@ -1,15 +1,13 @@
 """Docker From Scratch Workshop - Level 1: Chrooting into an image.
 
-Goal: Separate our mount table from the other processes.
+Goal: Instead of re-extracting the image, use it as a read-only layer
+      (lowerdir), and create a copy-on-write layer for changes (upperdir).
 
 Usage:
     running:
         sudo /venv/bin/python pocker.py run -i ubuntu -- bash
-    will:
-        - fork a new chrooted process in a new mount namespace
     test:
-        ls -lh /proc/self/ns/mnt, in container and host can see difference
-        findmnt, host cannot see mount operation doing in the container
+        see files in _pocker/container and _pocker/images
 """
 
 from __future__ import print_function
@@ -33,12 +31,7 @@ def _get_container_path(container_id, container_dir, *subdir_names):
 
 
 def create_container_root(image_name, image_dir, container_id, container_dir):
-    """Create a container root by extracting an image into a new directory
-
-    Usage:
-    new_root = create_container_root(
-        image_name, image_dir, container_id, container_dir)
-
+    """
     @param image_name: the image name to extract
     @param image_dir: the directory to lookup image tarballs in
     @param container_id: the unique container id
@@ -48,25 +41,37 @@ def create_container_root(image_name, image_dir, container_id, container_dir):
     @rtype: str
     """
     image_path = _get_image_path(image_name, image_dir)
-    container_root = _get_container_path(container_id, container_dir, 'rootfs')
-
     assert os.path.exists(image_path), "unable to locate image %s" % image_name
 
-    # 创建该容器的文件所在目录
-    if not os.path.exists(container_root):
-        os.makedirs(container_root)
+    # 判断该镜像是否已被解压，已被解压的镜像文件可作为lower层，供所有相关容器复用
+    # 如此既节省了容器的存储空间由加快了容器的启动速度（不用再解压镜像了）
+    image_root = os.path.join(image_dir, image_name, 'rootfs')
+    if not os.path.exists(image_root):
+        os.makedirs(image_root)
+        # 使用 with 自动进行文件对象的清理
+        # 解压缩镜像文件压缩包到该容器目录中
+        with tarfile.open(image_path) as t:
+            # Fun fact: tar files may contain *nix devices! *facepalm*
+            members = [m for m in t.getmembers()
+               if m.type not in (tarfile.CHRTYPE, tarfile.BLKTYPE)]
+            t.extractall(image_root, members=members)
+        
+    # 创建 overlay 文件系统所需的目录
+    # 挂载点，提供 lower 和 upper 的 merge 视图
+    container_root = _get_container_path(container_id, container_dir, 'rootfs')
+    # 容器读写层
+    container_diff = _get_container_path(container_id, container_dir, 'diff')
+    # overlay 必须的辅助工作目录
+    container_worker = _get_container_path(container_id, container_dir, 'worker')
+    for dir in (container_root, container_diff, container_worker):
+        if not os.path.exists(dir):
+            os.makedirs(dir)
 
-    # poivt_root 要求新老根目录必须在不同的文件系统，挂载一个临时文件系统做新根目录
-    linux.mount('tmpfs', container_root, 'tmpfs', 0, None)
+    # 在 container/<container-id>/rootfs 处挂载堆叠文件系统 overlay
+    linux.mount('overlay', container_root, 'overlay', linux.MS_NODEV,
+                "lowerdir={image_root},upperdir={diff},workdir={workdir}".format(image_root=image_root, diff=container_diff, workdir=container_worker))
 
-    # 使用 with 自动进行文件对象的清理
-    # 解压缩镜像文件压缩包到该容器目录中
-    with tarfile.open(image_path) as t:
-        # Fun fact: tar files may contain *nix devices! *facepalm*
-        members = [m for m in t.getmembers()
-                   if m.type not in (tarfile.CHRTYPE, tarfile.BLKTYPE)]
-        t.extractall(container_root, members=members)
-
+    # 返回 overlayfs 文件系统的挂载点，即 lower 和 upper 的 merge 目录
     return container_root
 
 
@@ -109,7 +114,7 @@ def makedev(dev_path):
 def contain(command, image_name, image_dir, container_id, container_dir):
     # 给当前进程创建 mount namespace
     linux.unshare(linux.CLONE_NEWNS)
-    # 将 host 的根目录挂载状态改为私有的，保证内部 mount ns 挂载操作不会到host
+    # 将 host 的根目录挂载状态改为私有的，保证内部 mount ns 挂载操作不会传播到 host
     linux.mount(None, '/', None, linux.MS_PRIVATE | linux.MS_REC, None)
 
     new_root = create_container_root(
