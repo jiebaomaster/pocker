@@ -56,6 +56,9 @@ def create_container_root(image_name, image_dir, container_id, container_dir):
     if not os.path.exists(container_root):
         os.makedirs(container_root)
 
+    # poivt_root 要求新老根目录必须在不同的文件系统，挂载一个临时文件系统做新根目录
+    linux.mount('tmpfs', container_root, 'tmpfs', 0, None)
+
     # 使用 with 自动进行文件对象的清理
     # 解压缩镜像文件压缩包到该容器目录中
     with tarfile.open(image_path) as t:
@@ -125,10 +128,15 @@ def contain(command, image_name, image_dir, container_id, container_dir):
     # 在设备目录下添加设备
     makedev(dev_path)
 
-    # 改变容器进程的根文件系统为容器所在的目录，该函数需要root权限
-    os.chroot(new_root)
+    # 将当前进程所在mount ns的所有进程的根文件系统变为容器目录，该函数需要root权限
+    old_root = os.path.join(new_root, 'old_root')
+    os.makedirs(old_root) # 创建临时文件夹用来存放老的根目录
+    linux.pivot_root(new_root, old_root)
     # 跳转到新的根目录下
     os.chdir('/')
+    # 卸载老的根目录，并删除临时文件夹
+    linux.umount2('/old_root', linux.MNT_DETACH)
+    os.rmdir('/old_root')
 
     # execvp 函数能够自动从 $PATH 中寻找匹配的命令
     os.execvp(command[0], command)
