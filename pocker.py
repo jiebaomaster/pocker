@@ -1,13 +1,10 @@
 """Docker From Scratch Workshop - Level 1: Chrooting into an image.
 
-Goal: Instead of re-extracting the image, use it as a read-only layer
-      (lowerdir), and create a copy-on-write layer for changes (upperdir).
+Goal: Have your own private hostname!
 
 Usage:
     running:
-        sudo /venv/bin/python pocker.py run -i ubuntu -- bash
-    test:
-        see files in _pocker/container and _pocker/images
+        sudo /venv/bin/python pocker.py run -i ubuntu bash -- -c hostname
 """
 
 from __future__ import print_function
@@ -116,6 +113,11 @@ def contain(command, image_name, image_dir, container_id, container_dir):
     linux.unshare(linux.CLONE_NEWNS)
     # 将 host 的根目录挂载状态改为私有的，保证内部 mount ns 挂载操作不会传播到 host
     linux.mount(None, '/', None, linux.MS_PRIVATE | linux.MS_REC, None)
+    
+    # 给当前进程创建 UTS namespace，主机名和域名隔离
+    linux.unshare(linux.CLONE_NEWUTS)
+    # 修改 hostname 为容器 id
+    linux.sethostname(container_id)
 
     new_root = create_container_root(
         image_name, image_dir, container_id, container_dir)
