@@ -1,12 +1,12 @@
 """Docker From Scratch Workshop - Level 1: Chrooting into an image.
 
-Goal: Have your new process start with PID 1 :)
+Goal: Have your own NICs.
 
 Usage:
     running:
         sudo /venv/bin/python pocker.py run -i ubuntu bash -- -c hostname
     test:
-        ps aux, can only see process in the container
+        ifconfig -a, can only "lo" in the container
 """
 
 from __future__ import print_function
@@ -158,7 +158,7 @@ def run(image_name, image_dir, container_dir, command):
     
     # 无法使用先 fork 再改变子进程命名空间的方法改变 PID
     # 使用更简单的API：clone，以在创建子进程的时候就改变命名空间
-    flag = linux.CLONE_NEWPID | linux.CLONE_NEWNS | linux.CLONE_NEWUTS
+    flag = ( linux.CLONE_NEWPID | linux.CLONE_NEWNS | linux.CLONE_NEWUTS | linux.CLONE_NEWNET )
     callback_args = (command, image_name, image_dir, contain_id, container_dir)
     pid = linux.clone(contain, flag, callback_args)
 
