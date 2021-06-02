@@ -39,9 +39,9 @@ sudo /venv/bin/python pocker.py run -i ubuntu bash
 2. COW 文件系统 overlayfs，复用镜像文件，使容器轻量化
 3. 资源隔离 namespace
     1. mount CLONE_NEWNS 容器内部的挂载不会传播到 host
-    1. hostname CLONE_NEWUTS 独立的域名和主机名
-    2. pid CLONE_NEWPID 容器内部的进程拥有独立的编号，不能看见 host 的进程
-    3. net CLONE_NEWNET 网络资源的隔离，
+    2. hostname CLONE_NEWUTS 独立的域名和主机名
+    3. pid CLONE_NEWPID 容器内部的进程拥有独立的编号，不能看见 host 的进程
+    4. net CLONE_NEWNET 网络资源的隔离，
 4. 资源限制 cgroup，通过操作 `/sys/fs/cgroup/` 下的文件
     1. cpu
     2. mem
