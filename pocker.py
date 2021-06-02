@@ -127,9 +127,32 @@ def _set_cpu_cgroup(container_id, cpu_shares):
         open(cpu_shares_file, 'w').write(str(cpu_shares))
 
 
+def _set_mem_cgroup(container_id, memory, memory_swap):
+    # 创建一个新的 memory cgroup 目录
+    MEM_CGROUP_BASEDIR = '/sys/fs/cgroup/memory'
+    container_mem_cgroup_dir = os.path.join(MEM_CGROUP_BASEDIR, 'pocker', container_id)
+    if not os.path.exists(container_mem_cgroup_dir):
+        os.makedirs(container_mem_cgroup_dir)
+
+    # 将当前容器进程的 pid 写入 cgroup 的 task 文件，表示当前进程受该 cgroup 管理
+    task_file = os.path.join(container_mem_cgroup_dir, 'tasks')
+    open(task_file, 'w').write(str(os.getpid()))
+    
+    # 设置 memory 使用限制
+    if memory is not None:
+        memory_limit_in_bytes_file = os.path.join(container_mem_cgroup_dir, 'memory.limit_in_bytes')
+        open(memory_limit_in_bytes_file, 'w').write(str(memory))
+    # 设置 memory 交换区使用限制
+    if memory_swap is not None:
+        memsw_limit_in_bytes_file = os.path.join(container_mem_cgroup_dir, 'memory.memsw.limit_in_bytes_file')
+        open(memsw_limit_in_bytes_file, 'w').write(str(memory_swap))
+
+
 def contain(command, image_name, image_dir, container_id, container_dir,
-            cpu_shares):
+            cpu_shares, memory, memory_swap):
+    # 使用 cgroup 子系统进行资源使用限制
     _set_cpu_cgroup(container_id, cpu_shares)
+    _set_mem_cgroup(container_id, memory, memory_swap)
 
     # 将 host 的根目录挂载状态改为私有的，保证内部 mount ns 挂载操作不会传播到 host
     linux.mount(None, '/', None, linux.MS_PRIVATE | linux.MS_REC, None)
@@ -168,19 +191,26 @@ def contain(command, image_name, image_dir, container_id, container_dir,
 
 
 @cli.command(context_settings=dict(ignore_unknown_options=True,))
+@click.option('--memory',
+            help='Momory limit in bytes. Use suffixes to represent larger units (k, m, g)',
+            default=None)
+@click.option('--memory-swap',
+            help='A positive integer equal to memory plus swap. Specify -1 to enable unlimited swap.',
+            default=None)
 @click.option('--cpu-shares', help='CPU shares (relative weight)', default=0)
 @click.option('--image-name', '-i', help='Image name', default='ubuntu')
 @click.option('--image-dir', help='Images directory', default='./_pocker/images')
 @click.option('--container-dir', help='Containers directory', default='./_pocker/containers')
 @click.argument('Command', required=True, nargs=-1)
-def run(cpu_shares, image_name, image_dir, container_dir, command):
+def run(memory, memory_swap, cpu_shares, image_name, image_dir, container_dir, command):
     # 为此次启动的容器确定一个随机的 id
     contain_id = str(uuid.uuid4())
     
     # 无法使用先 fork 再改变子进程命名空间的方法改变 PID
     # 使用更简单的API：clone，以在创建子进程的时候就改变命名空间
     flag = ( linux.CLONE_NEWPID | linux.CLONE_NEWNS | linux.CLONE_NEWUTS | linux.CLONE_NEWNET )
-    callback_args = (command, image_name, image_dir, contain_id, container_dir, cpu_shares)
+    callback_args = (command, image_name, image_dir, contain_id, container_dir,
+                     cpu_shares, memory, memory_swap)
     pid = linux.clone(contain, flag, callback_args)
 
     # This is the parent, pid contains the PID of the forked process
