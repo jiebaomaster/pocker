@@ -1,19 +1,19 @@
 """Docker From Scratch Workshop - Level 1: Chrooting into an image.
 
-Goal: Have your own NICs.
+Goal: prevent your container from starving host processes CPU time.
 
 Usage:
     running:
-        sudo /venv/bin/python pocker.py run -i ubuntu bash -- -c hostname
+        sudo /venv/bin/python pocker.py run -i ubuntu bash
     test:
-        ifconfig -a, can only "lo" in the container
+        see /sys/fs/cgroup/cpu/<container-id>,
+        use stress tool simulate workload on two container with different cpu-shares 
 """
 
 from __future__ import print_function
 
 import click
 import os
-import traceback
 import tarfile
 import uuid
 import stat
@@ -110,7 +110,27 @@ def makedev(dev_path):
                  dev_type, os.makedev(major, minor))
 
 
-def contain(command, image_name, image_dir, container_id, container_dir):
+def _set_cpu_cgroup(container_id, cpu_shares):
+    # 创建一个新的 cpu cgroup 目录
+    CPU_CGROUP_BASEDIR = '/sys/fs/cgroup/cpu'
+    container_cpu_cgroup_dir = os.path.join(CPU_CGROUP_BASEDIR, 'pocker', container_id)
+    if not os.path.exists(container_cpu_cgroup_dir):
+        os.makedirs(container_cpu_cgroup_dir)
+
+    # 将当前容器进程的 pid 写入 cgroup 的 task 文件，表示当前进程受该 cgroup 管理
+    task_file = os.path.join(container_cpu_cgroup_dir, 'tasks')
+    open(task_file, 'w').write(str(os.getpid()))
+    
+    # 设置 cpu 使用限制
+    if cpu_shares:
+        cpu_shares_file = os.path.join(container_cpu_cgroup_dir, 'cpu.shares')
+        open(cpu_shares_file, 'w').write(str(cpu_shares))
+
+
+def contain(command, image_name, image_dir, container_id, container_dir,
+            cpu_shares):
+    _set_cpu_cgroup(container_id, cpu_shares)
+
     # 将 host 的根目录挂载状态改为私有的，保证内部 mount ns 挂载操作不会传播到 host
     linux.mount(None, '/', None, linux.MS_PRIVATE | linux.MS_REC, None)
     
@@ -148,18 +168,19 @@ def contain(command, image_name, image_dir, container_id, container_dir):
 
 
 @cli.command(context_settings=dict(ignore_unknown_options=True,))
+@click.option('--cpu-shares', help='CPU shares (relative weight)', default=0)
 @click.option('--image-name', '-i', help='Image name', default='ubuntu')
 @click.option('--image-dir', help='Images directory', default='./_pocker/images')
 @click.option('--container-dir', help='Containers directory', default='./_pocker/containers')
 @click.argument('Command', required=True, nargs=-1)
-def run(image_name, image_dir, container_dir, command):
+def run(cpu_shares, image_name, image_dir, container_dir, command):
     # 为此次启动的容器确定一个随机的 id
     contain_id = str(uuid.uuid4())
     
     # 无法使用先 fork 再改变子进程命名空间的方法改变 PID
     # 使用更简单的API：clone，以在创建子进程的时候就改变命名空间
     flag = ( linux.CLONE_NEWPID | linux.CLONE_NEWNS | linux.CLONE_NEWUTS | linux.CLONE_NEWNET )
-    callback_args = (command, image_name, image_dir, contain_id, container_dir)
+    callback_args = (command, image_name, image_dir, contain_id, container_dir, cpu_shares)
     pid = linux.clone(contain, flag, callback_args)
 
     # This is the parent, pid contains the PID of the forked process
